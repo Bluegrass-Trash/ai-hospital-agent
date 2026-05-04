@@ -197,7 +197,7 @@ img{display:block;}
 .sd{width:7px;height:7px;border-radius:50%;background:#ddd;transition:all .3s;}
 .sd.done{background:var(--cc-teal);}.sd.act{background:var(--cc-blue);width:18px;border-radius:4px;}
 
-.msgs{flex:1;overflow-y:auto;padding:14px 12px;display:flex;flex-direction:column;gap:10px;scroll-behavior:smooth;}
+.msgs{flex:1;overflow-y:auto;padding:14px 12px;display:flex;flex-direction:column;justify-content:flex-end;gap:10px;scroll-behavior:smooth;}
 .msgs::-webkit-scrollbar{width:3px;}.msgs::-webkit-scrollbar-thumb{background:var(--cc-teal);border-radius:3px;}
 
 .brow{display:flex;align-items:flex-end;gap:6px;animation:fup .3s ease;}
@@ -442,19 +442,19 @@ img{display:block;}
   <p class="role-sub">Choose who you are to get started</p>
 
   <div class="role-cards">
-    <div class="role-card patient" role="button" tabindex="0" onclick="goToCharSelect()">
+    <div class="role-card patient" role="button" tabindex="0" onclick="onRolePatient()">
       <div class="role-card-icon">🧒</div>
       <h3>I'm a Patient</h3>
       <p>Learn what's going to happen with a buddy by your side</p>
       <span class="rc-btn blue" aria-hidden="true">Let's go!</span>
     </div>
-    <div class="role-card parent" role="button" tabindex="0" onclick="goToScreen('s-parent')">
+    <div class="role-card parent" role="button" tabindex="0" onclick="onRoleParent()">
       <div class="role-card-icon">👨‍👩‍👧</div>
       <h3>I'm a Parent</h3>
       <p>Get clear information about your child's care journey</p>
       <span class="rc-btn green" aria-hidden="true">Learn more</span>
     </div>
-    <div class="role-card donor" role="button" tabindex="0" onclick="goToScreen('s-donor')">
+    <div class="role-card donor" role="button" tabindex="0" onclick="onRoleDonor()">
       <div class="role-card-icon">❤️</div>
       <h3>I'm a Donor</h3>
       <p>See your impact and help kids like Charlie</p>
@@ -523,7 +523,7 @@ img{display:block;}
       </div>
 
     </div>
-    <button class="char-select-btn" id="char-go-btn" onclick="confirmCharSelect()">Start with my buddy →</button>
+    <button class="char-select-btn" id="char-go-btn" onclick="confirmCharSelect()">Let's start →</button>
   </div>
 </div>
 
@@ -695,9 +695,9 @@ const CHAR_NAMES = {charlie:'Charlie',gabriel:'Gabriel',lynn:'Lynn',maya:'Maya'}
 
 // ── SCREEN NAV ──
 function goToScreen(id) {
-  // Stop any in-flight voiceover whenever we change screens
-  // (especially required when exiting back to the Welcome screen)
-  if (typeof clearSpeech === 'function') clearSpeech();
+  // Only stop voiceover when leaving back to the Welcome (role-select)
+  // screen — other transitions are allowed to keep their queued speech.
+  if (id === 's-role' && typeof clearSpeech === 'function') clearSpeech();
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   const scr = document.getElementById(id);
   scr.classList.add('active');
@@ -705,6 +705,8 @@ function goToScreen(id) {
   // so the new screen is actually visible.
   try { window.scrollTo(0, 0); } catch (e) {}
   try { document.documentElement.scrollTop = 0; document.body.scrollTop = 0; } catch (e) {}
+  // Welcome announcements per screen
+  if (id === 's-char') setTimeout(() => speak('Choose your buddy.'), 700);
   scr.classList.remove('fade-in');
   void scr.offsetWidth;
   scr.classList.add('fade-in');
@@ -731,7 +733,14 @@ function selectChar(name) {
   document.querySelectorAll('.char-card').forEach(c => c.classList.remove('selected'));
   document.getElementById('cc-'+name).classList.add('selected');
   document.getElementById('char-go-btn').classList.add('ready');
+  // Buddy says their own name, in their own voice
+  speakNow(CHAR_NAMES[name] + '!', name);
 }
+
+// Role-card handlers — speak the role name + CTA, then navigate
+function onRolePatient() { speakNow("I'm a Patient. Let's go!"); goToCharSelect(); }
+function onRoleParent()  { speakNow("I'm a Parent. Learn more."); goToScreen('s-parent'); }
+function onRoleDonor()   { speakNow("I'm a Donor. Give now."); goToScreen('s-donor'); }
 
 function confirmCharSelect() {
   if (!selectedChar) return;
@@ -741,9 +750,10 @@ function confirmCharSelect() {
   document.getElementById('buddy-name-hdr').textContent = newName;
   document.getElementById('ct-name').textContent = newName;
   document.getElementById('chat-top-av').innerHTML = CHAR_SVG[selectedChar];
+  // Buddy says "Let's start!" in their own voice before transitioning
+  speakNow("Let's start!", selectedChar);
   goToScreen('s-app');
-  // Always restart so new character's story loads correctly
-  clearSpeech();
+  // Reset story state but DON'T cancel the just-queued "Let's start" line
   document.getElementById('msgs').innerHTML = '';
   step=0; kidName=''; selMusic=null; panelStack=[];
   dots(0); document.getElementById('back-btn').style.display='none';
@@ -782,17 +792,40 @@ function speak(text) {
   if (!soundOn || !window.speechSynthesis) return;
   const clean = stripForSpeech(text);
   if (!clean) return;
-  speechQueue.push(clean);
+  speechQueue.push({text: clean, char: null});
   if (!isSpeaking) processQueue();
+}
+
+// Speak a phrase using a SPECIFIC character's voice profile (for buddies'
+// own voices on the buddy-select screen, etc.)
+function speakAs(charKey, text) {
+  if (!soundOn || !window.speechSynthesis) return;
+  const clean = stripForSpeech(text);
+  if (!clean) return;
+  speechQueue.push({text: clean, char: charKey});
+  if (!isSpeaking) processQueue();
+}
+
+// Cancel anything queued and immediately speak (used for screen-change
+// announcements that should preempt earlier speech).
+function speakNow(text, charKey) {
+  if (!soundOn || !window.speechSynthesis) return;
+  try { window.speechSynthesis.cancel(); } catch(e) {}
+  speechQueue = [];
+  isSpeaking = false;
+  if (charKey) speakAs(charKey, text); else speak(text);
 }
 
 function processQueue() {
   if (!speechQueue.length) { isSpeaking = false; return; }
   if (!soundOn) { speechQueue = []; isSpeaking = false; return; }
   isSpeaking = true;
-  const text = speechQueue.shift();
+  const item = speechQueue.shift();
+  // Backwards-compat: queue items can be plain strings or {text, char}
+  const text = (typeof item === 'string') ? item : item.text;
+  const charKey = (typeof item === 'object' && item) ? item.char : null;
   const u = new SpeechSynthesisUtterance(text);
-  const profile = getVoiceProfile();
+  const profile = (charKey && VOICE_PROFILES[charKey]) ? VOICE_PROFILES[charKey] : getVoiceProfile();
   u.rate = profile.rate; u.pitch = profile.pitch; u.volume = 1;
   u.lang = 'en-US';
   const vs = window.speechSynthesis.getVoices();
@@ -829,8 +862,8 @@ function toggleSound() {
 }
 
 function speakLanding() {
-  if (!soundOn) return;
-  setTimeout(() => speak("Hi there! I'm Charlie. Who are you today?"), 900);
+  // No-op: welcome line now plays on first user gesture (iOS requires gesture
+  // for speechSynthesis to actually produce audio).
 }
 
 // ── CHAT HELPERS ──
@@ -935,31 +968,36 @@ async function greetByName() {
   await addBubble(`I am going to walk through everything with you — one step at a time.`, true, 250);
   const isGabriel = selectedChar === 'gabriel';
   setQR([
-    { label: "I'm scared", fn: onScared },
-    { label: "What's happening to me?", fn: onWHap },
-    { label: isGabriel ? 'What is wrong with my heart?' : 'What is an AVM?', fn: isGabriel ? onHeartIntro : onAVM }
+    { label: "Are you scared?", fn: onScared },
+    { label: "Do you want to know what's happening?", fn: onWHap },
+    { label: isGabriel ? "Do you want to know what's wrong with your heart?" : "Do you want to know what an AVM is?", fn: isGabriel ? onHeartIntro : onAVM }
   ]);
 }
 
 async function onScared() {
-  clearQR(); await addBubble("I'm scared", false);
-  await addBubble(`Hey ${kidName}, that's totally okay. I felt that way too.`, true, 300);
+  clearQR();
+  // Buddy asks the question themselves — no user bubble (the user just tapped
+  // to indicate "go ahead and ask me that").
+  await addBubble("Are you scared?", true, 100);
+  await addBubble(`That's totally okay, ${kidName}. I felt that way too.`, true, 300);
   await addBubble(`We go step by step. You don't have to know everything right now.`, true, 200);
   const isG = selectedChar === 'gabriel';
   await addBubble(isG ? `Want to start with the echo scan? It's quick and easy — promise!` : `Want to start with the CT scan? It's super quick — I promise!`, true, 200);
-  setQR([{ label: isG ? 'Tell me about the echo scan' : 'Tell me about the CT scan', fn: goToCT }, { label: isG ? 'What is wrong with my heart?' : 'What is an AVM?', fn: isG ? onHeartIntro : onAVM }]);
+  setQR([{ label: isG ? 'Tell me about the echo scan' : 'Tell me about the CT scan', fn: goToCT }, { label: isG ? "Do you want to know what's wrong with your heart?" : 'Do you want to know what an AVM is?', fn: isG ? onHeartIntro : onAVM }]);
 }
 
 async function onWHap() {
-  clearQR(); await addBubble("What's happening to me?", false);
+  clearQR();
+  await addBubble("Do you want to know what's happening?", true, 100);
   const isG = selectedChar === 'gabriel';
   await addBubble(isG ? `The doctors want to take some pictures of your heart, ${kidName}. The cameras don't hurt at all.` : `The doctors want to take some special pictures of your brain, ${kidName}. The cameras don't hurt at all.`, true, 300);
   await addBubble(`I'll walk through every step with you.`, true, 200);
-  setQR([{ label: 'Tell me about the scans', fn: goToCT }, { label: isG ? 'What is wrong with my heart?' : 'What is an AVM?', fn: isG ? onHeartIntro : onAVM }]);
+  setQR([{ label: 'Tell me about the scans', fn: goToCT }, { label: isG ? "Do you want to know what's wrong with your heart?" : 'Do you want to know what an AVM is?', fn: isG ? onHeartIntro : onAVM }]);
 }
 
 async function onAVM() {
-  clearQR(); await addBubble("What is an AVM?", false);
+  clearQR();
+  await addBubble("Do you want to know what an AVM is?", true, 100);
   await addBubble(`AVM is a fancy word for when some tiny blood paths in your brain got a little tangled — like headphone cords!`, true, 300);
   await addBubble(`Doctors want to look at the tangle carefully so they can figure out the best way to help you, ${kidName}.`, true, 200);
   pushPanel(`<div class="ptitle">🧠 What's an AVM?</div>
@@ -1107,6 +1145,9 @@ function playPreview(type) {
   stopAudio();
   if (!window.AudioContext && !window.webkitAudioContext) return;
   if (!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+  // iOS keeps the AudioContext suspended until a user gesture explicitly
+  // resumes it. Resume here (this fn is only called from a click handler).
+  if (audioCtx.state === 'suspended') { try { audioCtx.resume(); } catch(e){} }
   const dur=3.5, mg=audioCtx.createGain();
   mg.gain.setValueAtTime(0,audioCtx.currentTime);
   mg.gain.linearRampToValueAtTime(0.22,audioCtx.currentTime+0.2);
@@ -1154,7 +1195,8 @@ function changeM() {
 
 // ── GABRIEL HEART FLOW ──
 async function onHeartIntro() {
-  clearQR(); await addBubble("What is wrong with my heart?", false);
+  clearQR();
+  await addBubble("Do you want to know what's wrong with your heart?", true, 100);
   await addBubble(`Inside your heart there's a tiny door called a valve. It opens and closes to let blood move the right way.`, true, 300);
   await addBubble(`Your valve isn't closing all the way — so doctors want to replace it with a new one that works perfectly, ${kidName}.`, true, 250);
   pushPanel(`<div class="ptitle">Your heart valve</div>
@@ -1427,20 +1469,56 @@ function drawMaze(){
 
 function mazeTick(){if(document.getElementById('mz-cv')&&!mWon){drawMaze();requestAnimationFrame(mazeTick);}}
 
-function onMP(px,py){for(let i=0;i<MPATH.length-1;i++){const[x1,y1]=MPATH[i],[x2,y2]=MPATH[i+1],dx=x2-x1,dy=y2-y1,l2=dx*dx+dy*dy,t=Math.max(0,Math.min(1,((px-x1)*dx+(py-y1)*dy)/l2)),cx=x1+t*dx,cy=y1+t*dy;if(Math.sqrt((px-cx)**2+(py-cy)**2)<13)return{x:cx,y:cy,ok:true};}return{x:px,y:py,ok:false};}
+// Returns the closest segment-projection on MPATH, with the segment index +
+// the t value (0..1) along that segment. Used to rebuild the traced polyline
+// so it actually FOLLOWS the path's corners rather than cutting across them.
+function onMP(px,py){
+  let best = null;
+  for (let i = 0; i < MPATH.length - 1; i++) {
+    const [x1,y1] = MPATH[i], [x2,y2] = MPATH[i+1];
+    const dx = x2-x1, dy = y2-y1, l2 = dx*dx + dy*dy;
+    const t = Math.max(0, Math.min(1, ((px-x1)*dx + (py-y1)*dy) / l2));
+    const cx = x1 + t*dx, cy = y1 + t*dy;
+    const d  = Math.sqrt((px-cx)**2 + (py-cy)**2);
+    if (d < 13 && (!best || d < best.d)) best = {x:cx, y:cy, idx:i, t:t, d:d, ok:true};
+  }
+  return best || {x:px, y:py, ok:false};
+}
 function onDE(px,py){for(const br of MDEADS)for(let i=0;i<br.length-1;i++){const[x1,y1]=br[i],[x2,y2]=br[i+1],dx=x2-x1,dy=y2-y1,l2=dx*dx+dy*dy,t=Math.max(0,Math.min(1,((px-x1)*dx+(py-y1)*dy)/l2)),cx=x1+t*dx,cy=y1+t*dy;if(Math.sqrt((px-cx)**2+(py-cy)**2)<13)return true;}return false;}
 function mCP(e){const cv=document.getElementById('mz-cv');if(!cv)return{x:0,y:0};const r=cv.getBoundingClientRect(),s=280/r.width;return{x:(e.clientX-r.left)*s,y:(e.clientY-r.top)*s};}
 function mSD(e){const{x,y}=mCP(e);if(Math.sqrt((x-mDot.x)**2+(y-mDot.y)**2)<20)mDrag=true;}
 function mMV(e){
   if(!mDrag||mWon)return;
-  const{x,y}=mCP(e),res=onMP(x,y);
-  if(res.ok){mDot=res;
-    // Track traced path - add point if moved far enough
-    const last=mTraced[mTraced.length-1];
-    if(!last||Math.sqrt((mDot.x-last[0])**2+(mDot.y-last[1])**2)>4)mTraced.push([mDot.x,mDot.y]);
-    const end=MPATH[MPATH.length-1];if(Math.sqrt((mDot.x-end[0])**2+(mDot.y-end[1])**2)<16){mWon=true;mDrag=false;mTraced=MPATH.map(p=>[...p]);drawMaze();const s=document.getElementById('mzst');if(s){s.textContent='You found the path! Just like the tiny explorer!';s.className='mzst win';}}}
-  else if(onDE(x,y)){mDot={x:MPATH[0][0],y:MPATH[0][1]};mTraced=[[MPATH[0][0],MPATH[0][1]]];const s=document.getElementById('mzst');if(s){s.textContent='Dead end — back to the start!';s.className='mzst oops';setTimeout(()=>{if(s){s.textContent='Find the glowing explorer and guide it!';s.className='mzst';}},1400);}}
-  else{mDot={x:MPATH[0][0],y:MPATH[0][1]};mTraced=[[MPATH[0][0],MPATH[0][1]]];const s=document.getElementById('mzst');if(s){s.textContent='Stay on the blue path!';s.className='mzst oops';setTimeout(()=>{if(s){s.textContent='Find the glowing explorer and guide it!';s.className='mzst';}},1300);}}
+  const {x,y} = mCP(e);
+  const res = onMP(x,y);
+  if (res.ok) {
+    mDot = {x:res.x, y:res.y};
+    // Rebuild traced polyline so it ALWAYS follows MPATH's corners exactly.
+    // Trace = MPATH[0..idx] + interpolated point on segment idx at t.
+    mTraced = [[MPATH[0][0], MPATH[0][1]]];
+    for (let i = 1; i <= res.idx; i++) mTraced.push([MPATH[i][0], MPATH[i][1]]);
+    if (res.t > 0.001) mTraced.push([res.x, res.y]);
+    const end = MPATH[MPATH.length-1];
+    if (Math.sqrt((mDot.x-end[0])**2 + (mDot.y-end[1])**2) < 16) {
+      mWon = true; mDrag = false;
+      mTraced = MPATH.map(p => [...p]);
+      drawMaze();
+      const s = document.getElementById('mzst');
+      if (s) { s.textContent = 'You found the path! Just like the tiny explorer!'; s.className = 'mzst win'; }
+    }
+  } else if (onDE(x,y)) {
+    mDot = {x:MPATH[0][0], y:MPATH[0][1]};
+    mTraced = [[MPATH[0][0], MPATH[0][1]]];
+    const s = document.getElementById('mzst');
+    if (s) { s.textContent = 'Dead end — back to the start!'; s.className = 'mzst oops';
+      setTimeout(() => { if (s) { s.textContent = 'Find the glowing explorer and guide it!'; s.className = 'mzst'; } }, 1400); }
+  } else {
+    mDot = {x:MPATH[0][0], y:MPATH[0][1]};
+    mTraced = [[MPATH[0][0], MPATH[0][1]]];
+    const s = document.getElementById('mzst');
+    if (s) { s.textContent = 'Stay on the blue path!'; s.className = 'mzst oops';
+      setTimeout(() => { if (s) { s.textContent = 'Find the glowing explorer and guide it!'; s.className = 'mzst'; } }, 1300); }
+  }
 }
 function mSU(){mDrag=false;}
 
@@ -1473,14 +1551,38 @@ function closeTY(){document.getElementById('tym').classList.remove('show');}
 // inside the first user-gesture handler. We do that with a near-silent
 // primer so that later (post-await) speak() calls are allowed.
 let __speechPrimed = false;
+let __welcomeAnnounced = false;
 function __primeSpeech() {
-  if (__speechPrimed || !window.speechSynthesis) return;
+  if (!window.speechSynthesis) return;
+  if (!__speechPrimed) {
+    try {
+      const u = new SpeechSynthesisUtterance(' ');
+      u.volume = 0.01; u.rate = 1; u.pitch = 1;
+      window.speechSynthesis.speak(u);
+      __speechPrimed = true;
+    } catch (e) { /* ignore */ }
+  }
+  // Also unlock the AudioContext (used by music previews) on first gesture.
   try {
-    const u = new SpeechSynthesisUtterance(' ');
-    u.volume = 0; u.rate = 1; u.pitch = 1;
-    window.speechSynthesis.speak(u);
-    __speechPrimed = true;
+    if (window.AudioContext || window.webkitAudioContext) {
+      if (!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') audioCtx.resume();
+    }
   } catch (e) { /* ignore */ }
+  // First time the user touches the welcome screen, speak the welcome line
+  // — but only if we're still on s-role (didn't tap a button immediately).
+  if (!__welcomeAnnounced) {
+    __welcomeAnnounced = true;
+    const onRole = document.getElementById('s-role') && document.getElementById('s-role').classList.contains('active');
+    if (onRole) {
+      // Delay slightly so a rapid tap on a role card preempts via speakNow.
+      setTimeout(() => {
+        if (document.getElementById('s-role') && document.getElementById('s-role').classList.contains('active')) {
+          speak('Welcome! Choose who you are to get started.');
+        }
+      }, 250);
+    }
+  }
 }
 // iOS Safari has a long-standing bug where the speech queue freezes if a
 // single utterance runs longer than ~15 seconds, or after a moment of
