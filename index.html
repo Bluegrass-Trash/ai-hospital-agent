@@ -156,10 +156,16 @@ img{display:block;}
 .sbtn:hover{background:var(--cc-blue-lt);}
 
 .app-body{display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:14px;flex:1;overflow:hidden;max-width:1120px;width:100%;margin:0 auto;}
+/* QR at the app-body level (rather than inside chat-panel) so on mobile
+   the action buttons sit below BOTH the chat and the activity panel. */
+.app-body > .qr{grid-column:1 / -1;border-radius:var(--rx);}
 @media(max-width:768px){
-  .app-body{grid-template-columns:1fr;overflow:auto;}
+  .app-body{display:flex;flex-direction:column;overflow:auto;}
   #s-app{height:auto;overflow:auto;}
-  .chat-panel,.side-panel{height:auto;min-height:300px;}
+  /* Order: chat first (history), activity (game/music) middle, QR bottom */
+  .chat-panel{order:1;height:auto;min-height:160px;max-height:34vh;}
+  .side-panel{order:2;height:auto;min-height:380px;}
+  .app-body > .qr{order:3;}
   .char-grid{gap:12px;}.char-card{width:145px;}
 }
 
@@ -415,6 +421,12 @@ img{display:block;}
 .tyb p{font-size:13.5px;font-weight:600;color:var(--mid);line-height:1.6;}
 .tycl{padding:11px 26px;border-radius:var(--pill);border:none;background:var(--cc-magenta);color:white;font-size:14px;font-weight:800;cursor:pointer;}
 
+/* TAP-TO-START HINT (shown on welcome screen until first interaction) */
+#tap-hint{position:fixed;left:0;right:0;bottom:18px;z-index:50;display:flex;justify-content:center;pointer-events:none;transition:opacity .35s ease;}
+#tap-hint .pill{background:rgba(0,0,0,.78);color:white;font-size:13px;font-weight:700;padding:9px 16px;border-radius:999px;display:flex;align-items:center;gap:8px;box-shadow:0 4px 16px rgba(0,0,0,.18);animation:tapPulse 1.6s ease-in-out infinite;}
+#tap-hint.hidden{opacity:0;}
+@keyframes tapPulse{0%,100%{transform:translateY(0);}50%{transform:translateY(-4px);}}
+
 /* SHARED HDR */
 .gen-hdr{background:white;border-bottom:1px solid var(--bdr);padding:11px 20px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 10px rgba(0,0,0,.06);flex-shrink:0;}
 .swbtn{padding:7px 14px;border-radius:var(--pill);border:1.5px solid var(--bdr);background:white;font-size:12px;font-weight:700;color:var(--cc-purple);cursor:pointer;transition:all .2s;}
@@ -422,6 +434,10 @@ img{display:block;}
 </style>
 </head>
 <body>
+
+<!-- Tap-to-start hint — sits over the welcome screen until first user
+     gesture, prompting the user to tap so iOS can unlock audio. -->
+<div id="tap-hint"><div class="pill">👆 Tap anywhere to start &amp; enable sound</div></div>
 
 <!-- ══════════════════════════════════════
      SCREEN 1 — ROLE SELECT
@@ -566,9 +582,9 @@ img{display:block;}
         </div>
       </div>
       <div class="msgs" id="msgs"></div>
-      <div class="qr" id="qr"></div>
     </div>
     <div class="side-panel" id="sp"></div>
+    <div class="qr" id="qr"></div>
   </div>
 </div>
 
@@ -776,12 +792,15 @@ function stripForSpeech(text) {
   return t;
 }
 
-// Per-character voice profiles
+// Per-character voice profiles. `voicePicks` is an ordered list of
+// substring matches against the iOS voice name — first match wins, with
+// Enhanced/Premium variants preferred over the default. This makes each
+// buddy actually SOUND different instead of all collapsing to Samantha.
 const VOICE_PROFILES = {
-  charlie: { rate: 0.88, pitch: 1.15, preferFemale: false },
-  gabriel: { rate: 0.85, pitch: 0.95, preferFemale: false },
-  lynn:    { rate: 0.90, pitch: 1.20, preferFemale: true  },
-  maya:    { rate: 0.87, pitch: 1.18, preferFemale: true  },
+  charlie: { rate: 0.92, pitch: 1.18, voicePicks: ['Tom','Aaron','Eddy','Daniel'],     preferFemale: false },
+  gabriel: { rate: 0.88, pitch: 1.00, voicePicks: ['Daniel','Oliver','Rocko','Aaron'], preferFemale: false },
+  lynn:    { rate: 0.94, pitch: 1.30, voicePicks: ['Allison','Flo','Karen','Ava'],     preferFemale: true  },
+  maya:    { rate: 0.90, pitch: 1.22, voicePicks: ['Karen','Shelley','Sandy','Susan'], preferFemale: true  },
 };
 
 function getVoiceProfile() {
@@ -829,20 +848,31 @@ function processQueue() {
   u.rate = profile.rate; u.pitch = profile.pitch; u.volume = 1;
   u.lang = 'en-US';
   const vs = window.speechSynthesis.getVoices();
-  // iOS-friendly voice names go FIRST so iPhone picks Samantha/Karen/etc
-  // before falling back to anything else.
-  const iosFemale = ['Samantha','Karen','Tessa','Moira','Fiona','Susan','Allison','Ava','Serena'];
-  const iosMale   = ['Aaron','Daniel','Fred','Tom','Alex','Oliver','Rishi'];
-  let v;
-  if (profile.preferFemale) {
-    v = vs.find(x => x.lang.startsWith('en') && iosFemale.some(n => x.name.includes(n)))
-      || vs.find(x => x.lang.startsWith('en') && /female|woman|girl/i.test(x.name))
-      || vs.find(x => x.lang.startsWith('en') && x.name.includes('Google'))
-      || vs.find(x => x.lang.startsWith('en'));
-  } else {
-    v = vs.find(x => x.lang.startsWith('en') && iosMale.some(n => x.name.includes(n)))
-      || vs.find(x => x.lang.startsWith('en') && x.name.includes('Google'))
-      || vs.find(x => x.lang.startsWith('en'));
+  // Pick a voice using the per-character voicePicks list. Prefer Enhanced /
+  // Premium / Eloquence variants over the default compact voice — these
+  // sound dramatically more natural on iOS when the user has them installed.
+  const isEnhanced = (x) => /enhanced|premium|eloquence/i.test(x.name) || /enhanced|premium|eloquence/i.test(x.voiceURI || '');
+  let v = null;
+  if (profile.voicePicks) {
+    for (const pick of profile.voicePicks) {
+      // First try enhanced/premium version of this voice
+      v = vs.find(x => x.lang.startsWith('en') && x.name.includes(pick) && isEnhanced(x));
+      if (v) break;
+      // Then any variant of this voice
+      v = vs.find(x => x.lang.startsWith('en') && x.name.includes(pick));
+      if (v) break;
+    }
+  }
+  // Fallbacks: prefer any enhanced English voice, then the gendered list,
+  // then anything English.
+  if (!v) {
+    const iosFemale = ['Samantha','Karen','Tessa','Moira','Fiona','Susan','Allison','Ava','Serena'];
+    const iosMale   = ['Aaron','Daniel','Fred','Tom','Alex','Oliver','Rishi'];
+    const list = profile.preferFemale ? iosFemale : iosMale;
+    v = vs.find(x => x.lang.startsWith('en') && list.some(n => x.name.includes(n)) && isEnhanced(x))
+     || vs.find(x => x.lang.startsWith('en') && list.some(n => x.name.includes(n)))
+     || vs.find(x => x.lang.startsWith('en') && isEnhanced(x))
+     || vs.find(x => x.lang.startsWith('en'));
   }
   if (v) u.voice = v;
   u.onend = () => { isSpeaking = false; processQueue(); };
@@ -890,6 +920,25 @@ async function addBubble(text, isBuddy, delay) {
     m.appendChild(row);
   }
   m.scrollTop = m.scrollHeight;
+}
+
+// Clear chat history (used at major section transitions so each section
+// feels like a fresh "screen" rather than one long endless thread).
+function clearChat() {
+  const m = msgsEl();
+  if (m) m.innerHTML = '';
+}
+
+// Major-section transition: clear chat, scroll to top of activity panel.
+async function transitionSection() {
+  clearChat();
+  try { window.scrollTo({top: 0, behavior: 'smooth'}); } catch(e){}
+  // Bring the side panel into view (where the activity will appear).
+  const sp = spEl();
+  if (sp && sp.scrollIntoView) {
+    setTimeout(() => { try { sp.scrollIntoView({behavior:'smooth', block:'start'}); } catch(e){} }, 250);
+  }
+  await sleep(150);
 }
 
 function setQR(btns) {
@@ -1012,6 +1061,7 @@ async function onAVM() {
 
 async function goToCT() {
   clearQR(); step=1; dots(1);
+  await transitionSection();
   const isG = selectedChar === 'gabriel';
   await addBubble(isG ? `First up — the echocardiogram, ${kidName}.` : `First up — the CT scan, ${kidName}.`, true, 200);
   await addBubble(isG ? `It's a special camera that takes pictures of your heart using sound waves. No radiation at all!` : `It's like a super-fast camera for your brain. You lie still on a table and the machine does all the work!`, true, 300);
@@ -1050,6 +1100,7 @@ async function goToCT() {
 
 async function goToMRIPick() {
   clearQR(); step=2; dots(2);
+  await transitionSection();
   await addBubble(`Now for the MRI, ${kidName}.`, true, 200);
   await addBubble(`It takes longer pictures. It can be a little loud — like knocking sounds — but it doesn't hurt.`, true, 300);
   await addBubble(`The cool part? You pick music to listen to! Try the previews below 🎵`, true, 200);
@@ -1070,6 +1121,7 @@ async function goToMRIPick() {
 
 async function goToMRIExp() {
   clearQR(); step=3; dots(3);
+  await transitionSection();
   const m = selMusic || 'your music';
   await addBubble(`${m} — perfect choice, ${kidName}! 🎵`, true, 200);
   await addBubble(`The machine looks like a big donut. You slide in on a soft, comfy table.`, true, 200);
@@ -1085,6 +1137,7 @@ async function goToMRIExp() {
 
 async function goToAngio() {
   clearQR(); step=4; dots(4);
+  await transitionSection();
   const isG = selectedChar === 'gabriel';
   await addBubble(`You're doing amazing, ${kidName}! Seriously.`, true, 200);
   if (isG) {
@@ -1113,6 +1166,7 @@ async function goToAngio() {
 
 async function onGameDone() {
   clearQR();
+  await transitionSection();
   const isG = selectedChar === 'gabriel';
   await addBubble(isG ? "I solved the valve puzzle!" : "I finished the explorer game!", false);
   await addBubble(isG ? `That's exactly how doctors think about it, ${kidName}! They orient the new valve so blood can flow perfectly through your heart.` : `Yes! ${kidName}, you got it! That's kind of what the doctor does — following a tiny path to get the clearest picture.`, true, 300);
@@ -1141,16 +1195,17 @@ async function restartApp() {
 let audioNodes = [];
 function stopAudio() { audioNodes.forEach(n=>{ try{n.stop();}catch(e){} }); audioNodes=[]; }
 
-function playPreview(type) {
+async function playPreview(type) {
   stopAudio();
   if (!window.AudioContext && !window.webkitAudioContext) return;
   if (!audioCtx) audioCtx = new (window.AudioContext||window.webkitAudioContext)();
   // iOS keeps the AudioContext suspended until a user gesture explicitly
-  // resumes it. Resume here (this fn is only called from a click handler).
-  if (audioCtx.state === 'suspended') { try { audioCtx.resume(); } catch(e){} }
+  // resumes it. AWAIT the resume promise so we don't schedule oscillators
+  // before the context is actually running.
+  if (audioCtx.state === 'suspended') { try { await audioCtx.resume(); } catch(e){} }
   const dur=3.5, mg=audioCtx.createGain();
   mg.gain.setValueAtTime(0,audioCtx.currentTime);
-  mg.gain.linearRampToValueAtTime(0.22,audioCtx.currentTime+0.2);
+  mg.gain.linearRampToValueAtTime(0.55,audioCtx.currentTime+0.2);
   mg.gain.linearRampToValueAtTime(0,audioCtx.currentTime+dur-0.3);
   mg.connect(audioCtx.destination);
   function tone(f,s,l,w){const o=audioCtx.createOscillator(),g=audioCtx.createGain();o.type=w||'sine';o.frequency.value=f;g.gain.setValueAtTime(0,audioCtx.currentTime+s);g.gain.linearRampToValueAtTime(0.6,audioCtx.currentTime+s+0.05);g.gain.linearRampToValueAtTime(0,audioCtx.currentTime+s+l);o.connect(g);g.connect(mg);o.start(audioCtx.currentTime+s);o.stop(audioCtx.currentTime+s+l+0.1);audioNodes.push(o);}
@@ -1561,6 +1616,12 @@ function __primeSpeech() {
       window.speechSynthesis.speak(u);
       __speechPrimed = true;
     } catch (e) { /* ignore */ }
+  }
+  // Fade out the tap-to-start hint on first interaction
+  const hint = document.getElementById('tap-hint');
+  if (hint && !hint.classList.contains('hidden')) {
+    hint.classList.add('hidden');
+    setTimeout(() => { if (hint && hint.parentNode) hint.parentNode.removeChild(hint); }, 600);
   }
   // Also unlock the AudioContext (used by music previews) on first gesture.
   try {
