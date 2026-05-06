@@ -1503,6 +1503,7 @@ async function goToAngio() {
         <div class="mz-tip"><div class="mz-tip-ic">👆</div><div class="mz-tip-tx"><strong>Tap each pipe piece to rotate it.</strong> Connect the inlet to the heart so blood can flow through!</div></div>
         <canvas id="pipe-cv" width="280" height="280"></canvas>
         <div class="mzst" id="pipest">Rotate the pieces to connect the path!</div>
+        <button class="cta" id="pipe-done-btn" style="display:none" onclick="onGameDone()">I solved it! →</button>
       </div>`);
     setTimeout(() => { initPipe(); }, 120);
   } else {
@@ -1513,6 +1514,7 @@ async function goToAngio() {
         <div class="mz-tip"><div class="mz-tip-ic">👆</div><div class="mz-tip-tx"><strong>Drag the explorer</strong> through the brain — stay in the pink to reach the AVM tangle.</div></div>
         <canvas id="mz-cv" width="320" height="240"></canvas>
         <div class="mzst" id="mzst">Find the AVM tangle — drag the explorer through the pink!</div>
+        <button class="cta" id="mz-done-btn" style="display:none" onclick="onGameDone()">I found the tangle! →</button>
       </div>`);
     setTimeout(() => { initMaze(); requestAnimationFrame(mazeTick); }, 120);
   }
@@ -1683,6 +1685,8 @@ function checkValveSolved() {
     valveSolved = true;
     const st = document.getElementById('pipest');
     if (st) { st.textContent = 'The valve is open! Blood can flow freely!'; st.className = 'mzst win'; }
+    const btn = document.getElementById('pipe-done-btn');
+    if (btn) btn.style.display = '';
     drawValve(true);
     // Animate flow
     animateFlow();
@@ -2042,6 +2046,8 @@ function mMV(e) {
       drawMaze();
       const s = document.getElementById('mzst');
       if (s) { s.textContent = 'You found the AVM tangle! Just like the doctors do!'; s.className = 'mzst win'; }
+      const btn = document.getElementById('mz-done-btn');
+      if (btn) btn.style.display = '';
     }
   }
 }
