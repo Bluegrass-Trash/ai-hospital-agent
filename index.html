@@ -221,7 +221,19 @@ img{display:block;}
     display:flex;position:fixed;inset:0;z-index:200;
     background:white;border-radius:0;padding:64px 20px 100px;
     overflow-y:auto;animation:modalIn .25s ease;
+    /* Vertically center content when it fits; fall back to start when it
+       overflows so the top isn't clipped on small screens. */
+    justify-content:center;
+    align-items:center;
   }
+  /* Modern browsers honor `safe center` and avoid the top-cutoff issue
+     when content overflows. iOS Safari 15+ supports this. */
+  @supports (justify-content: safe center) {
+    .side-panel.modal-on{justify-content:safe center;align-items:safe center;}
+  }
+  /* Children (title, illustration, button, etc.) keep their natural
+     stacking width — full-width inside the modal padding. */
+  .side-panel.modal-on > *{flex-shrink:0;width:100%;max-width:480px;}
   /* QR — same width as chat panel, anchored above safe-area-inset-bottom */
   .app-body > .qr{
     position:absolute;left:160px;right:10px;
