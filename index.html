@@ -1593,6 +1593,14 @@ async function goToAngio() {
 async function onGameDone() {
   clearQR();
   closeActivityModal();           // Game's done — return to chat
+  // Clear the activity panel content too, so the brain canvas (or any
+  // other game artwork) doesn't linger as a background behind the chat
+  // on wide layouts. Also stops the requestAnimationFrame loop because
+  // the canvas DOM element is gone.
+  setPanel('');
+  panelStack = [];
+  const backBtn = document.getElementById('back-btn');
+  if (backBtn) backBtn.style.display = 'none';
   await transitionSection();
   const isG = selectedChar === 'gabriel';
   await addBubble(isG ? "I solved the valve puzzle!" : "I finished the explorer game!", false);
