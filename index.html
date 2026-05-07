@@ -1151,6 +1151,44 @@ function speakNow(text, charKey) {
   if (charKey) speakAs(charKey, text); else speak(text);
 }
 
+// iOS Web Speech fallback (used when there's no pre-recorded match AND
+// /api/tts is unavailable). Returns a Promise that resolves when the
+// utterance finishes (or errors out). Honors the per-character voice
+// profile so each buddy still gets a distinct iOS voice.
+function __speakWithWebSpeech(text, charKey) {
+  return new Promise((resolve) => {
+    if (!window.speechSynthesis) { resolve(); return; }
+    const u = new SpeechSynthesisUtterance(text);
+    const profile = (charKey && VOICE_PROFILES[charKey]) ? VOICE_PROFILES[charKey] : getVoiceProfile();
+    u.rate = profile.rate; u.pitch = profile.pitch; u.volume = 1;
+    u.lang = 'en-US';
+    const vs = window.speechSynthesis.getVoices();
+    const isEnhanced = (x) => /enhanced|premium|eloquence/i.test(x.name) || /enhanced|premium|eloquence/i.test(x.voiceURI || '');
+    let v = null;
+    if (profile.voicePicks) {
+      for (const pick of profile.voicePicks) {
+        v = vs.find(x => x.lang.startsWith('en') && x.name.includes(pick) && isEnhanced(x));
+        if (v) break;
+        v = vs.find(x => x.lang.startsWith('en') && x.name.includes(pick));
+        if (v) break;
+      }
+    }
+    if (!v) {
+      const iosFemale = ['Samantha','Karen','Tessa','Moira','Fiona','Susan','Allison','Ava','Serena'];
+      const iosMale   = ['Aaron','Daniel','Fred','Tom','Alex','Oliver','Rishi'];
+      const list = profile.preferFemale ? iosFemale : iosMale;
+      v = vs.find(x => x.lang.startsWith('en') && list.some(n => x.name.includes(n)) && isEnhanced(x))
+       || vs.find(x => x.lang.startsWith('en') && list.some(n => x.name.includes(n)))
+       || vs.find(x => x.lang.startsWith('en') && isEnhanced(x))
+       || vs.find(x => x.lang.startsWith('en'));
+    }
+    if (v) u.voice = v;
+    u.onend = () => resolve();
+    u.onerror = () => resolve();
+    window.speechSynthesis.speak(u);
+  });
+}
+
 function processQueue() {
   if (!speechQueue.length) { isSpeaking = false; return; }
   if (!soundOn) { speechQueue = []; isSpeaking = false; return; }
@@ -1168,9 +1206,11 @@ function processQueue() {
     return;
   }
 
-  // No pre-recorded match. Fall back to on-demand ElevenLabs TTS via the
-  // serverless function so personalized lines (with the kid's name) stay
-  // in the same voice as the pre-recorded audio.
+  // No pre-recorded match. Try on-demand ElevenLabs TTS via the serverless
+  // function so personalized lines (with the kid's name) stay in the same
+  // voice as the pre-recorded audio. If that fails (e.g. audio assets not
+  // yet deployed, /api/tts not configured, offline), fall through to the
+  // iOS Web Speech fallback below so the kid always hears something.
   if (AUDIO_MANIFEST) {
     const speaker = charKey || selectedChar || 'narrator';
     console.log('[VO] On-demand TTS for "' + text.slice(0, 60) + '" (speaker=' + speaker + ')');
@@ -1178,51 +1218,23 @@ function processQueue() {
       if (url) {
         __playAudio(url).then(() => { isSpeaking = false; processQueue(); });
       } else {
-        // Serverless function unavailable (local dev, or env vars not set).
-        // Last resort: log + skip so we don't suddenly switch to a robotic
-        // iOS voice that breaks the audio consistency.
-        console.warn('[VO] /api/tts unavailable — skipping line');
-        isSpeaking = false; processQueue();
+        // Serverless function unavailable — fall back to iOS Web Speech so
+        // we don't go silent. (Voice quality won't match ElevenLabs, but
+        // some voiceover is better than none.)
+        console.warn('[VO] /api/tts unavailable — using iOS Web Speech fallback');
+        __speakWithWebSpeech(text, charKey).then(() => {
+          isSpeaking = false; processQueue();
+        });
       }
     });
     return;
   }
 
-  const u = new SpeechSynthesisUtterance(text);
-  const profile = (charKey && VOICE_PROFILES[charKey]) ? VOICE_PROFILES[charKey] : getVoiceProfile();
-  u.rate = profile.rate; u.pitch = profile.pitch; u.volume = 1;
-  u.lang = 'en-US';
-  const vs = window.speechSynthesis.getVoices();
-  // Pick a voice using the per-character voicePicks list. Prefer Enhanced /
-  // Premium / Eloquence variants over the default compact voice — these
-  // sound dramatically more natural on iOS when the user has them installed.
-  const isEnhanced = (x) => /enhanced|premium|eloquence/i.test(x.name) || /enhanced|premium|eloquence/i.test(x.voiceURI || '');
-  let v = null;
-  if (profile.voicePicks) {
-    for (const pick of profile.voicePicks) {
-      // First try enhanced/premium version of this voice
-      v = vs.find(x => x.lang.startsWith('en') && x.name.includes(pick) && isEnhanced(x));
-      if (v) break;
-      // Then any variant of this voice
-      v = vs.find(x => x.lang.startsWith('en') && x.name.includes(pick));
-      if (v) break;
-    }
-  }
-  // Fallbacks: prefer any enhanced English voice, then the gendered list,
-  // then anything English.
-  if (!v) {
-    const iosFemale = ['Samantha','Karen','Tessa','Moira','Fiona','Susan','Allison','Ava','Serena'];
-    const iosMale   = ['Aaron','Daniel','Fred','Tom','Alex','Oliver','Rishi'];
-    const list = profile.preferFemale ? iosFemale : iosMale;
-    v = vs.find(x => x.lang.startsWith('en') && list.some(n => x.name.includes(n)) && isEnhanced(x))
-     || vs.find(x => x.lang.startsWith('en') && list.some(n => x.name.includes(n)))
-     || vs.find(x => x.lang.startsWith('en') && isEnhanced(x))
-     || vs.find(x => x.lang.startsWith('en'));
-  }
-  if (v) u.voice = v;
-  u.onend = () => { isSpeaking = false; processQueue(); };
-  u.onerror = () => { isSpeaking = false; processQueue(); };
-  window.speechSynthesis.speak(u);
+  // Manifest never loaded (e.g. very early in startup, or audio-manifest.json
+  // 404'd). Use Web Speech directly so we never go silent.
+  __speakWithWebSpeech(text, charKey).then(() => {
+    isSpeaking = false; processQueue();
+  });
 }
 
 function clearSpeech() {
