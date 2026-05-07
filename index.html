@@ -309,6 +309,9 @@ img{display:block;}
   pointer-events:none;z-index:3;image-rendering:auto;
 }
 .chat-char[src=""]{display:none;}
+/* Lynn's source artwork faces left; mirror her so she faces right like
+   the rest of the buddies (matches the welcome-row flip). */
+.chat-char.flip-h{transform:scaleX(-1);transform-origin:center;}
 @media(max-width:480px){
   .chat-char{left:-3px;max-width:44%;}
 }
@@ -960,6 +963,8 @@ function confirmCharSelect() {
       : ((document.querySelector('.welcome-char-row .wcr.' + selectedChar) || {}).src || '');
     charImg.src = src;
     charImg.alt = newName;
+    // Mirror Lynn so she faces right toward the chat panel like the others
+    charImg.classList.toggle('flip-h', selectedChar === 'lynn');
   }
   // Buddy says "Let's start!" in their own voice before transitioning
   speakNow("Let's start!", selectedChar);
