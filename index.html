@@ -1091,6 +1091,33 @@ function __stopAllAudio() {
   if (__activeAudio) { try { __activeAudio.pause(); } catch(e){} __activeAudio = null; }
 }
 
+// On-demand ElevenLabs TTS via /api/tts (Vercel serverless function).
+// Used for personalized lines (those containing the kid's name) so the
+// voice stays consistent with the pre-recorded MP3s. Results are cached
+// in memory by character+text so we don't re-fetch the same line twice.
+const __ttsCache = new Map();
+const __ttsInflight = new Map();
+function __fetchOnDemandAudio(text, character) {
+  const key = (character || 'narrator') + '|' + text;
+  if (__ttsCache.has(key))     return Promise.resolve(__ttsCache.get(key));
+  if (__ttsInflight.has(key))  return __ttsInflight.get(key);
+  const p = fetch('/api/tts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text, character: character || 'narrator' }),
+  }).then(r => r.ok ? r.blob() : null)
+    .then(blob => {
+      __ttsInflight.delete(key);
+      if (!blob) return null;
+      const url = URL.createObjectURL(blob);
+      __ttsCache.set(key, url);
+      return url;
+    })
+    .catch(() => { __ttsInflight.delete(key); return null; });
+  __ttsInflight.set(key, p);
+  return p;
+}
+
 function speak(text) {
   if (!soundOn || !window.speechSynthesis) return;
   const clean = stripForSpeech(text);
@@ -1136,13 +1163,24 @@ function processQueue() {
     return;
   }
 
-  // If the manifest IS loaded but this line wasn't found, surface a warning
-  // (so we can see what's missing) and skip rather than fall back to a
-  // wildly different system voice that breaks the consistency.
+  // No pre-recorded match. Fall back to on-demand ElevenLabs TTS via the
+  // serverless function so personalized lines (with the kid's name) stay
+  // in the same voice as the pre-recorded audio.
   if (AUDIO_MANIFEST) {
     const speaker = charKey || selectedChar || 'narrator';
-    console.warn('[VO] No audio match for "' + text.slice(0, 60) + '" (speaker=' + speaker + ')');
-    isSpeaking = false; processQueue(); return;
+    console.log('[VO] On-demand TTS for "' + text.slice(0, 60) + '" (speaker=' + speaker + ')');
+    __fetchOnDemandAudio(text, speaker).then(url => {
+      if (url) {
+        __playAudio(url).then(() => { isSpeaking = false; processQueue(); });
+      } else {
+        // Serverless function unavailable (local dev, or env vars not set).
+        // Last resort: log + skip so we don't suddenly switch to a robotic
+        // iOS voice that breaks the audio consistency.
+        console.warn('[VO] /api/tts unavailable — skipping line');
+        isSpeaking = false; processQueue();
+      }
+    });
+    return;
   }
 
   const u = new SpeechSynthesisUtterance(text);
