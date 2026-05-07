@@ -1071,11 +1071,23 @@ function __lookupAudio(text, charKey) {
   const speaker = charKey || selectedChar || 'narrator';
   const bucket = AUDIO_MANIFEST[speaker];
   if (!bucket) return null;
-  const cleaned = __stripDynamics(stripForSpeech(text));
-  const key = __normalizeAudioKey(cleaned);
-  return bucket[key] || null;
+  // Compare the line both with and without dynamic substitutions stripped.
+  // If stripping the kid's name (or music selection) changed the text, this
+  // line is personalized — skip the manifest match so processQueue routes it
+  // to /api/tts instead. That way the buddy actually pronounces the kid's
+  // name in their ElevenLabs voice rather than playing the "name removed"
+  // pre-recorded clip.
+  const stripped = stripForSpeech(text);
+  const cleaned = __stripDynamics(stripped);
+  if (__normalizeAudioKey(stripped) !== __normalizeAudioKey(cleaned)) {
+    return null;
+  }
+  return bucket[__normalizeAudioKey(cleaned)] || null;
 }
 
+// Resolves with `true` when the clip plays through to completion, or
+// `false` if it fails to load / play (404, decode error, autoplay block).
+// Callers can use that signal to fall back to the next option.
 function __playAudio(src) {
   return new Promise((resolve) => {
     try {
@@ -1083,12 +1095,14 @@ function __playAudio(src) {
       const a = new Audio(src);
       a.preload = 'auto';
       a.volume = 1;
-      a.onended = () => { __activeAudio = null; resolve(); };
-      a.onerror = () => { __activeAudio = null; resolve(); };
+      let settled = false;
+      const finish = (ok) => { if (settled) return; settled = true; __activeAudio = null; resolve(ok); };
+      a.onended = () => finish(true);
+      a.onerror = () => finish(false);
       __activeAudio = a;
       const p = a.play();
-      if (p && p.catch) p.catch(() => { __activeAudio = null; resolve(); });
-    } catch (e) { resolve(); }
+      if (p && p.catch) p.catch(() => finish(false));
+    } catch (e) { resolve(false); }
   });
 }
 
@@ -1198,43 +1212,43 @@ function processQueue() {
   const text = (typeof item === 'string') ? item : item.text;
   const charKey = (typeof item === 'object' && item) ? item.char : null;
 
-  // If we have a pre-recorded high-quality audio file for this line, play
-  // that instead of Web Speech.
+  // Voiceover fallback chain (each step ends the line if it succeeds, falls
+  // through to the next if it fails so the kid always hears something):
+  //   1. Pre-recorded ElevenLabs MP3 in /audio/<char>/  (manifest match)
+  //   2. On-demand ElevenLabs via /api/tts  (handles personalized lines AND
+  //      missing pre-recorded files — e.g. assets not deployed yet)
+  //   3. iOS Web Speech  (last resort so we never go silent)
+  const speaker = charKey || selectedChar || 'narrator';
+  const next = () => { isSpeaking = false; processQueue(); };
+
+  const tryWebSpeech = () => __speakWithWebSpeech(text, charKey).then(next);
+  const tryOnDemand = () => __fetchOnDemandAudio(text, speaker).then(url => {
+    if (!url) {
+      console.warn('[VO] /api/tts unavailable — using iOS Web Speech fallback');
+      return tryWebSpeech();
+    }
+    return __playAudio(url).then(ok => ok ? next() : tryWebSpeech());
+  });
+
   const audioSrc = __lookupAudio(text, charKey);
   if (audioSrc) {
-    __playAudio(audioSrc).then(() => { isSpeaking = false; processQueue(); });
-    return;
-  }
-
-  // No pre-recorded match. Try on-demand ElevenLabs TTS via the serverless
-  // function so personalized lines (with the kid's name) stay in the same
-  // voice as the pre-recorded audio. If that fails (e.g. audio assets not
-  // yet deployed, /api/tts not configured, offline), fall through to the
-  // iOS Web Speech fallback below so the kid always hears something.
-  if (AUDIO_MANIFEST) {
-    const speaker = charKey || selectedChar || 'narrator';
-    console.log('[VO] On-demand TTS for "' + text.slice(0, 60) + '" (speaker=' + speaker + ')');
-    __fetchOnDemandAudio(text, speaker).then(url => {
-      if (url) {
-        __playAudio(url).then(() => { isSpeaking = false; processQueue(); });
-      } else {
-        // Serverless function unavailable — fall back to iOS Web Speech so
-        // we don't go silent. (Voice quality won't match ElevenLabs, but
-        // some voiceover is better than none.)
-        console.warn('[VO] /api/tts unavailable — using iOS Web Speech fallback');
-        __speakWithWebSpeech(text, charKey).then(() => {
-          isSpeaking = false; processQueue();
-        });
-      }
+    __playAudio(audioSrc).then(ok => {
+      if (ok) return next();
+      // Pre-recorded file failed (likely 404 — assets not deployed yet).
+      console.warn('[VO] Pre-recorded MP3 failed to load: ' + audioSrc + ' — falling back to /api/tts');
+      tryOnDemand();
     });
     return;
   }
 
-  // Manifest never loaded (e.g. very early in startup, or audio-manifest.json
-  // 404'd). Use Web Speech directly so we never go silent.
-  __speakWithWebSpeech(text, charKey).then(() => {
-    isSpeaking = false; processQueue();
-  });
+  if (AUDIO_MANIFEST) {
+    console.log('[VO] On-demand TTS for "' + text.slice(0, 60) + '" (speaker=' + speaker + ')');
+    tryOnDemand();
+    return;
+  }
+
+  // Manifest never loaded — straight to Web Speech.
+  tryWebSpeech();
 }
 
 function clearSpeech() {
@@ -2139,9 +2153,24 @@ function closeTY(){document.getElementById('tym').classList.remove('show');}
 // primer so that later (post-await) speak() calls are allowed.
 let __speechPrimed = false;
 let __welcomeAnnounced = false;
+// Tiny silent MP3 (1 frame, ~1KB) used to unlock iOS HTML Audio playback
+// on first user gesture. Without this, the first new Audio().play() call
+// after page load is silently blocked by Safari's autoplay policy and
+// our pre-recorded ElevenLabs voiceover never plays.
+const __SILENT_MP3 = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQxAAB8AAAf4AAAAgAAA/wAAABBhdmlhAAAAAAAAAAAAAAAEluZm8AAAAPAAAAAwAAACgAGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRk=';
+let __audioPrimed = false;
+function __primeAudio() {
+  if (__audioPrimed) return;
+  try {
+    const a = new Audio(__SILENT_MP3);
+    a.volume = 0;
+    const p = a.play();
+    if (p && p.then) p.then(() => { __audioPrimed = true; }).catch(() => {});
+  } catch (e) { /* ignore */ }
+}
+
 function __primeSpeech() {
-  if (!window.speechSynthesis) return;
-  if (!__speechPrimed) {
+  if (!__speechPrimed && window.speechSynthesis) {
     try {
       const u = new SpeechSynthesisUtterance(' ');
       u.volume = 0.01; u.rate = 1; u.pitch = 1;
@@ -2149,6 +2178,7 @@ function __primeSpeech() {
       __speechPrimed = true;
     } catch (e) { /* ignore */ }
   }
+  __primeAudio();
   // Fade out the tap-to-start hint on first interaction
   const hint = document.getElementById('tap-hint');
   if (hint && !hint.classList.contains('hidden')) {
